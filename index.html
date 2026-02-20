@@ -1,327 +1,350 @@
-/**
- * WixDragDrop Engine v1.0
- * A reusable drag-and-drop game engine built for Wix Velo.
- * Paste into: public/dragDropEngine.js
- * ──────────────────────────────────────────────
- */
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drag & Drop Game</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
 
-export class DragDropEngine {
-  constructor(config = {}) {
-    this.config = {
-      mode:          config.mode       || 'match',
-      items:         config.items      || [],
-      zones:         config.zones      || null,   // auto-generated if null
-      theme:         config.theme      || 'dark',
-      pointsCorrect: config.pointsCorrect || 10,
-      pointsWrong:   config.pointsWrong   || 0,
-      snapBack:      config.snapBack   !== false,
-      shakeOnWrong:  config.shakeOnWrong !== false,
-      showProgress:  config.showProgress !== false,
-      allowRetry:    config.allowRetry || false,
-      onDrop:        config.onDrop     || (() => {}),
-      onCorrect:     config.onCorrect  || (() => {}),
-      onWrong:       config.onWrong    || (() => {}),
-      onComplete:    config.onComplete || (() => {}),
-    };
-
-    this.state = {
-      score:     0,
-      correct:   0,
-      attempts:  0,
-      matched:   new Set(),
-      dragging:  null,
-    };
-
-    this._ghost    = null;
-    this._handlers = {};
+  :root {
+    --bg:      #0a0a0f;
+    --surface: #12121a;
+    --sur2:    #1c1c28;
+    --border:  #2a2a3f;
+    --accent:  #7c5cfc;
+    --accent2: #fc5c7d;
+    --green:   #5cfca2;
+    --text:    #e8e8f0;
+    --muted:   #6b6b8a;
   }
 
-  // ── PUBLIC API ──────────────────────────────
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /** Mount the engine to a CSS selector or DOM element */
-  mount(target) {
-    this._root = typeof target === 'string'
-      ? document.querySelector(target)
-      : target;
-    if (!this._root) throw new Error(⁠ DragDropEngine: target not found: ${target} ⁠);
-    this._build();
-    this._attachEvents();
-    return this;
+  body {
+    font-family: 'Space Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 
-  /** Rebuild with new config */
-  update(newConfig) {
-    Object.assign(this.config, newConfig);
-    this.reset();
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .game-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .score-box {
+    font-size: 13px;
+    background: var(--sur2);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 20px;
+  }
+  .score-box span { color: var(--accent); font-weight: 700; }
+
+  .progress { height: 4px; background: var(--border); border-radius: 2px; }
+  .progress-fill {
+    height: 100%; border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .4s cubic-bezier(.34,1.56,.64,1);
+    width: 0%;
   }
 
-  /** Reset game to initial state */
-  reset() {
-    this.state = { score: 0, correct: 0, attempts: 0, matched: new Set(), dragging: null };
-    if (this._root) this._build();
-    return this;
+  .modes { display: flex; gap: 8px; flex-wrap: wrap; }
+  .mode-btn {
+    padding: 7px 14px; border-radius: 8px; font-size: 11px;
+    font-family: 'Space Mono', monospace; cursor: pointer;
+    border: 1px solid var(--border); background: var(--sur2);
+    color: var(--muted); transition: all .2s;
+  }
+  .mode-btn:hover { border-color: var(--accent); color: var(--text); }
+  .mode-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+  .tokens { display: flex; flex-wrap: wrap; gap: 10px; min-height: 46px; }
+  .token {
+    padding: 10px 18px;
+    background: var(--sur2); border: 1px solid var(--border);
+    border-radius: 30px; font-size: 12px; cursor: grab;
+    user-select: none; touch-action: none;
+    transition: transform .15s, box-shadow .15s, border-color .15s;
+  }
+  .token:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(124,92,252,.35);
+    border-color: var(--accent);
+  }
+  .token.dragging { opacity: 0; pointer-events: none; }
+  .token.used     { opacity: .3; pointer-events: none; }
+
+  .zones { display: flex; flex-wrap: wrap; gap: 10px; }
+  .zone {
+    flex: 1; min-width: 110px; min-height: 70px;
+    border: 2px dashed var(--border); border-radius: 12px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 10px; transition: all .2s; text-align: center;
+  }
+  .zone-lbl {
+    font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;
+  }
+  .zone-val { font-size: 12px; color: var(--muted); }
+  .zone.over    { border-color: var(--accent); background: rgba(124,92,252,.08); }
+  .zone.correct { border-color: var(--green);  background: rgba(92,252,162,.08); border-style: solid; }
+  .zone.wrong   { border-color: var(--accent2); background: rgba(252,92,125,.08); animation: shake .3s; }
+
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    25%      { transform: translateX(-8px); }
+    75%      { transform: translateX(8px); }
   }
 
-  /** Get current score */
-  getScore() { return this.state.score; }
-
-  // ── BUILD ────────────────────────────────────
-
-  _build() {
-    this._root.innerHTML = '';
-    this._root.className = ⁠ dde-stage dde-theme-${this.config.theme} ⁠;
-
-    // Inject styles if not already present
-    if (!document.getElementById('dde-styles')) {
-      const style = document.createElement('style');
-      style.id = 'dde-styles';
-      style.textContent = DragDropEngine.CSS;
-      document.head.appendChild(style);
-    }
-
-    // Progress bar
-    if (this.config.showProgress) {
-      const bar = document.createElement('div');
-      bar.className = 'dde-progress';
-      bar.innerHTML = '<div class="dde-progress-fill" id="dde-progress-fill"></div>';
-      this._root.appendChild(bar);
-    }
-
-    // Score display
-    const scoreEl = document.createElement('div');
-    scoreEl.className = 'dde-score';
-    scoreEl.innerHTML = 'Score: <strong id="dde-score">0</strong>';
-    this._root.appendChild(scoreEl);
-
-    // Build items based on mode
-    const items = this._shuffle([...this.config.items]);
-    const zones = this._buildZones(items);
-
-    const tokenWrap = document.createElement('div');
-    tokenWrap.className = 'dde-tokens';
-    items.forEach(item => {
-      const el = document.createElement('div');
-      el.className = 'dde-token';
-      el.textContent = item.label;
-      el.dataset.id  = item.id;
-      el.draggable   = true;
-      tokenWrap.appendChild(el);
-    });
-    this._root.appendChild(tokenWrap);
-
-    const zoneWrap = document.createElement('div');
-    zoneWrap.className = 'dde-zones';
-    zones.forEach(zone => {
-      const el = document.createElement('div');
-      el.className = 'dde-zone';
-      el.dataset.accepts = zone.accepts;
-      el.innerHTML = `
-        <span class="dde-zone-label">${zone.label}</span>
-        <div class="dde-zone-slot">Drop here</div>
-      `;
-      zoneWrap.appendChild(el);
-    });
-    this._root.appendChild(zoneWrap);
-
-    // Ghost element
-    this._ghost = document.createElement('div');
-    this._ghost.className = 'dde-ghost';
-    document.body.appendChild(this._ghost);
+  #ghost {
+    position: fixed; pointer-events: none; z-index: 9999;
+    padding: 10px 18px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 30px; font-family: 'Space Mono', monospace;
+    font-size: 12px; color: white;
+    box-shadow: 0 12px 40px rgba(124,92,252,.5);
+    transform: translate(-50%, -50%) rotate(-3deg) scale(1.05);
+    display: none;
   }
 
-  _buildZones(items) {
-    if (this.config.zones) return this.config.zones;
-    // Auto-generate zones from items
-    return this._shuffle(items.map(item => ({
-      id:      ⁠ zone-${item.id} ⁠,
-      label:   item.label,   // override per mode below
-      accepts: item.id,
-    }))).map((zone, i) => {
-      if (this.config.mode === 'match') {
-        // zones show the "answer" side
-        const item = items.find(it => it.id === zone.accepts);
-        zone.label = item ? item.match : zone.label;
-      }
-      return zone;
-    });
+  #toast {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 22px; border-radius: 10px;
+    font-size: 13px; font-weight: 700;
+    pointer-events: none; opacity: 0;
+    transition: opacity .3s; z-index: 9998; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; }
+  #toast.win  { background: rgba(92,252,162,.15); border: 1px solid var(--green);   color: var(--green); }
+  #toast.lose { background: rgba(252,92,125,.15); border: 1px solid var(--accent2); color: var(--accent2); }
+
+  .reset-btn {
+    align-self: flex-end; padding: 8px 18px; border-radius: 8px;
+    font-size: 11px; font-family: 'Space Mono', monospace; cursor: pointer;
+    border: 1px solid var(--border); background: var(--sur2);
+    color: var(--muted); transition: all .2s;
+  }
+  .reset-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+</style>
+</head>
+<body>
+
+<div id="ghost"></div>
+<div id="toast"></div>
+
+<div class="header">
+  <div class="game-title" id="gameTitle">Çiftleri Eşleştir</div>
+  <div class="score-box">Puan: <span id="scoreEl">0</span></div>
+</div>
+
+<div class="progress"><div class="progress-fill" id="progressEl"></div></div>
+
+<div class="modes">
+  <button class="mode-btn active" data-mode="match">Eşleştir</button>
+  <button class="mode-btn" data-mode="sort">Sınıflandır</button>
+  <button class="mode-btn" data-mode="order">Sırala</button>
+  <button class="mode-btn" data-mode="fill">Başkentler</button>
+</div>
+
+<div class="tokens" id="tokens"></div>
+<div class="zones"  id="zones"></div>
+
+<button class="reset-btn" id="resetBtn">↺ Yeniden Başla</button>
+
+<script>
+// ════════════════════════════════════════
+//  OYUN VERİSİ — buradan özelleştirin
+// ════════════════════════════════════════
+
+const GAMES = {
+  match: {
+    title: 'Çiftleri Eşleştir',
+    items: [
+      { token: 'Kedi',  zone: 'Miyav' },
+      { token: 'Köpek', zone: 'Hav'   },
+      { token: 'İnek',  zone: 'Möö'   },
+      { token: 'Kuş',   zone: 'Cik'   },
+    ],
+  },
+  sort: {
+    title: 'Kategoriye Göre Sınıflandır',
+    categories: ['Meyve', 'Sebze'],
+    items: [
+      { token: 'Elma',    zone: 'Meyve' },
+      { token: 'Gül',     zone: 'Sebze' },
+      { token: 'Havuç',   zone: 'Sebze' },
+      { token: 'Kiraz',   zone: 'Meyve' },
+      { token: 'Bezelye', zone: 'Sebze' },
+      { token: 'Mango',   zone: 'Meyve' },
+    ],
+  },
+  order: {
+    title: 'Doğru Sıraya Diz',
+    items: [
+      { token: '3.', zone: 'Sıra 1' },
+      { token: '1.', zone: 'Sıra 2' },
+      { token: '4.', zone: 'Sıra 3' },
+      { token: '2.', zone: 'Sıra 4' },
+    ],
+    zones: ['Sıra 1', 'Sıra 2', 'Sıra 3', 'Sıra 4'],
+    correctOrder: { '1.': 'Sıra 1', '2.': 'Sıra 2', '3.': 'Sıra 3', '4.': 'Sıra 4' },
+  },
+  fill: {
+    title: 'Başkenti Eşleştir',
+    items: [
+      { token: 'Paris',  zone: 'Fransa'   },
+      { token: 'Tokyo',  zone: 'Japonya'  },
+      { token: 'Berlin', zone: 'Almanya'  },
+      { token: 'Kahire', zone: 'Mısır'    },
+      { token: 'Ankara', zone: 'Türkiye'  },
+    ],
+  },
+};
+
+// ════════════════════════════════════════
+//  ENGINE
+// ════════════════════════════════════════
+
+let state = {};
+let ghost = document.getElementById('ghost');
+let draggingEl = null;
+
+function shuffle(a) { return a.sort(() => Math.random() - .5); }
+
+function init(mode) {
+  const g = GAMES[mode];
+  state = { mode, score: 0, correct: 0, total: 0, pairs: {} };
+
+  document.getElementById('gameTitle').textContent  = g.title;
+  document.getElementById('scoreEl').textContent    = '0';
+  document.getElementById('progressEl').style.width = '0%';
+
+  if (mode === 'order') {
+    state.pairs = { ...g.correctOrder };
+  } else {
+    g.items.forEach(it => state.pairs[it.token] = it.zone);
   }
 
-  // ── EVENTS ───────────────────────────────────
+  const tokensEl = document.getElementById('tokens');
+  tokensEl.innerHTML = '';
+  const tokens = shuffle(g.items.map(it => it.token));
+  state.total = tokens.length;
+  tokens.forEach(name => {
+    const el = document.createElement('div');
+    el.className    = 'token';
+    el.textContent  = name;
+    el.dataset.name = name;
+    tokensEl.appendChild(el);
+  });
 
-  _attachEvents() {
-    const root = this._root;
-
-    // ── Pointer drag (desktop + mobile) ──
-    let offsetX = 0, offsetY = 0;
-    const ghost = this._ghost;
-
-    const onPointerDown = (e) => {
-      const token = e.target.closest('.dde-token');
-      if (!token || token.classList.contains('dde-used')) return;
-      e.preventDefault();
-
-      this.state.dragging = token.dataset.id;
-      ghost.textContent   = token.textContent;
-      ghost.style.display = 'block';
-      token.classList.add('dde-dragging');
-
-      const move = (ev) => {
-        const cx = ev.clientX ?? ev.touches?.[0]?.clientX ?? 0;
-        const cy = ev.clientY ?? ev.touches?.[0]?.clientY ?? 0;
-        ghost.style.left = cx + 'px';
-        ghost.style.top  = cy + 'px';
-
-        // highlight zones under cursor
-        document.querySelectorAll('.dde-zone').forEach(z => {
-          const r = z.getBoundingClientRect();
-          z.classList.toggle('dde-over',
-            cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom
-          );
-        });
-      };
-
-      const up = (ev) => {
-        ghost.style.display = 'none';
-        token.classList.remove('dde-dragging');
-        const cx = ev.clientX ?? ev.changedTouches?.[0]?.clientX ?? 0;
-        const cy = ev.clientY ?? ev.changedTouches?.[0]?.clientY ?? 0;
-
-        let dropped = false;
-        document.querySelectorAll('.dde-zone').forEach(zone => {
-          zone.classList.remove('dde-over');
-          const r = zone.getBoundingClientRect();
-          if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
-            this._handleDrop(token, zone);
-            dropped = true;
-          }
-        });
-
-        this.state.dragging = null;
-        document.removeEventListener('pointermove', move);
-        document.removeEventListener('pointerup', up);
-        document.removeEventListener('touchmove', move);
-        document.removeEventListener('touchend', up);
-      };
-
-      document.addEventListener('pointermove', move, { passive: false });
-      document.addEventListener('pointerup', up);
-      document.addEventListener('touchmove', move, { passive: false });
-      document.addEventListener('touchend', up);
-    };
-
-    root.addEventListener('pointerdown', onPointerDown);
-    this._handlers.pointerdown = onPointerDown;
-  }
-
-  _handleDrop(token, zone) {
-    const itemId   = token.dataset.id;
-    const accepts  = zone.dataset.accepts;
-    const isRight  = accepts === itemId;
-
-    this.state.attempts++;
-    this.config.onDrop(itemId, zone.dataset.accepts);
-
-    if (isRight) {
-      this.state.score   += this.config.pointsCorrect;
-      this.state.correct++;
-      this.state.matched.add(itemId);
-
-      token.classList.add('dde-used');
-      zone.classList.add('dde-correct');
-      zone.querySelector('.dde-zone-slot').textContent = token.textContent;
-
-      this._updateScore();
-      this._updateProgress();
-      this.config.onCorrect(itemId, zone.dataset.accepts, this.state.score);
-
-      // Check completion
-      const total = this._root.querySelectorAll('.dde-token').length;
-      if (this.state.correct >= total) {
-        setTimeout(() => this.config.onComplete(this.state.score, this.state.attempts), 400);
-      }
-    } else {
-      this.state.score = Math.max(0, this.state.score + this.config.pointsWrong);
-      if (this.config.shakeOnWrong) {
-        zone.classList.add('dde-wrong');
-        setTimeout(() => zone.classList.remove('dde-wrong'), 400);
-      }
-      this._updateScore();
-      this.config.onWrong(itemId, zone.dataset.accepts, this.state.score);
-    }
-  }
-
-  _updateScore() {
-    const el = this._root.querySelector('#dde-score');
-    if (el) el.textContent = this.state.score;
-  }
-
-  _updateProgress() {
-    const fill  = document.getElementById('dde-progress-fill');
-    if (!fill) return;
-    const total = this._root.querySelectorAll('.dde-token').length;
-    fill.style.width = ⁠ ${(this.state.correct / total) * 100}% ⁠;
-  }
-
-  _shuffle(arr) {
-    return arr.sort(() => Math.random() - 0.5);
-  }
-
-  // ── CSS ──────────────────────────────────────
-
-  static CSS = `
-    .dde-stage { font-family: sans-serif; padding: 20px; border-radius: 16px;
-      background: #12121a; color: #e8e8f0; }
-    .dde-theme-light { background: #f8f8fc; color: #1a1a2e; }
-    .dde-progress { height: 4px; background: #2a2a3f; border-radius: 2px; margin-bottom: 16px; }
-    .dde-progress-fill { height: 100%; background: linear-gradient(90deg,#7c5cfc,#fc5c7d);
-      border-radius: 2px; transition: width .4s cubic-bezier(.34,1.56,.64,1); width: 0; }
-    .dde-score { font-size: 13px; text-align: right; margin-bottom: 16px; color: #6b6b8a; }
-    .dde-score strong { color: #7c5cfc; }
-    .dde-tokens { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
-    .dde-token { padding: 10px 18px; background: #1c1c28; border: 1px solid #2a2a3f;
-      border-radius: 30px; font-size: 13px; cursor: grab; user-select: none;
-      transition: transform .15s, box-shadow .15s, border-color .15s; }
-    .dde-token:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(124,92,252,.3);
-      border-color: #7c5cfc; }
-    .dde-token.dde-dragging { opacity: 0; pointer-events: none; }
-    .dde-token.dde-used { opacity: .35; pointer-events: none; }
-    .dde-zones { display: flex; flex-wrap: wrap; gap: 12px; }
-    .dde-zone { flex: 1; min-width: 100px; min-height: 70px; border: 2px dashed #2a2a3f;
-      border-radius: 12px; display: flex; flex-direction: column; align-items: center;
-      justify-content: center; padding: 10px; transition: all .2s; }
-    .dde-zone-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
-      color: #6b6b8a; margin-bottom: 6px; }
-    .dde-zone-slot { font-size: 12px; color: #6b6b8a; }
-    .dde-zone.dde-over { border-color: #7c5cfc; background: rgba(124,92,252,.08); }
-    .dde-zone.dde-correct { border-color: #5cfca2; background: rgba(92,252,162,.08);
-      border-style: solid; }
-    .dde-zone.dde-wrong { border-color: #fc5c7d; background: rgba(252,92,125,.08);
-      animation: dde-shake .3s; }
-    .dde-ghost { position: fixed; pointer-events: none; z-index: 9999;
-      padding: 10px 18px; background: linear-gradient(135deg,#7c5cfc,#fc5c7d);
-      border-radius: 30px; font-size: 13px; color: white;
-      box-shadow: 0 12px 40px rgba(124,92,252,.5);
-      transform: translate(-50%,-50%) rotate(-3deg) scale(1.05); display: none; }
-    @keyframes dde-shake {
-      0%,100% { transform: translateX(0); }
-      25% { transform: translateX(-8px); }
-      75% { transform: translateX(8px); }
-    }
-  `;
+  const zonesEl = document.getElementById('zones');
+  zonesEl.innerHTML = '';
+  const zoneLabels = mode === 'sort'  ? g.categories
+                   : mode === 'order' ? g.zones
+                   : shuffle(g.items.map(it => it.zone));
+  zoneLabels.forEach(label => {
+    const el = document.createElement('div');
+    el.className    = 'zone';
+    el.dataset.label = label;
+    el.innerHTML = `<div class="zone-lbl">${label}</div><div class="zone-val">buraya bırak</div>`;
+    zonesEl.appendChild(el);
+  });
 }
 
-// ── WIXIFY HELPER ───────────────────────────────
-// Bridges the engine with Wix's postMessage API
-// so Wix page code can react to game events.
+function onDrop(tokenEl, zoneEl) {
+  const name  = tokenEl.dataset.name;
+  const label = zoneEl.dataset.label;
 
-export function wixify(game, htmlComponentId) {
-  const send = (type, data) => {
-    if (typeof $w !== 'undefined') {
-      $w(htmlComponentId).postMessage({ type, ...data });
+  if (state.pairs[name] === label) {
+    state.score++;  state.correct++;
+    tokenEl.classList.add('used');
+    zoneEl.querySelector('.zone-val').textContent = name;
+    zoneEl.classList.add('correct');
+    document.getElementById('scoreEl').textContent    = state.score * 10;
+    document.getElementById('progressEl').style.width = (state.correct / state.total * 100) + '%';
+    if (state.correct >= state.total) {
+      setTimeout(() => toast('🎉 Tebrikler! Puan: ' + state.score * 10, 'win'), 200);
+      window.parent.postMessage({ type: 'GAME_COMPLETE', score: state.score * 10 }, '*');
     }
+  } else {
+    zoneEl.classList.add('wrong');
+    setTimeout(() => zoneEl.classList.remove('wrong'), 400);
+    toast('✗ Yanlış, tekrar dene!', 'lose');
+    window.parent.postMessage({ type: 'GAME_WRONG', token: name, zone: label }, '*');
+  }
+}
+
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = 'show ' + type;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.className = '', 2000);
+}
+
+document.getElementById('tokens').addEventListener('pointerdown', e => {
+  const token = e.target.closest('.token');
+  if (!token || token.classList.contains('used')) return;
+  e.preventDefault();
+  draggingEl = token;
+  ghost.textContent   = token.dataset.name;
+  ghost.style.display = 'block';
+  token.classList.add('dragging');
+
+  const move = ev => {
+    const cx = ev.clientX ?? ev.touches?.[0]?.clientX;
+    const cy = ev.clientY ?? ev.touches?.[0]?.clientY;
+    ghost.style.left = cx + 'px';
+    ghost.style.top  = cy + 'px';
+    document.querySelectorAll('.zone').forEach(z => {
+      const r = z.getBoundingClientRect();
+      z.classList.toggle('over', cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom);
+    });
   };
-  game.config.onCorrect  = (item, zone, score) => send('CORRECT',  { item, zone, score });
-  game.config.onWrong    = (item, zone, score) => send('WRONG',    { item, zone, score });
-  game.config.onComplete = (score, attempts)   => send('COMPLETE', { score, attempts });
-  return game;
-}
+
+  const up = ev => {
+    ghost.style.display = 'none';
+    if (draggingEl) draggingEl.classList.remove('dragging');
+    const cx = ev.clientX ?? ev.changedTouches?.[0]?.clientX;
+    const cy = ev.clientY ?? ev.changedTouches?.[0]?.clientY;
+    document.querySelectorAll('.zone').forEach(z => {
+      const r = z.getBoundingClientRect();
+      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) onDrop(draggingEl, z);
+      z.classList.remove('over');
+    });
+    draggingEl = null;
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+  };
+
+  document.addEventListener('pointermove', move, { passive: false });
+  document.addEventListener('pointerup', up);
+});
+
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    init(btn.dataset.mode);
+  });
+});
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  init(document.querySelector('.mode-btn.active')?.dataset.mode || 'match');
+});
+
+init('match');
+</script>
+</body>
+</html>
